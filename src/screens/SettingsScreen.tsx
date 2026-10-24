@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, View, Alert, FlatList } from 'react-native';
-import { Button, Card, Text, TextInput, Divider, List, IconButton, Portal, Dialog } from 'react-native-paper';
+import { Button, Card, Text, TextInput, Divider, List, IconButton } from 'react-native-paper';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as DocumentPicker from 'expo-document-picker';
 import { getSupabase, hasHardcodedConfig } from '../utils/supabase';
+import { saveBookBackupToFile, saveAllBooksSeparateBackups, listLocalBackups, restoreFromBackupJSON, shareLocalBackupFile } from '../utils/backup';
 import { Book } from '../types';
 
 interface SettingsScreenProps {
@@ -18,8 +21,48 @@ export default function SettingsScreen({ book, onBackToBooks, onLogout, onResetC
   const [isOwner, setIsOwner] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isHardcoded, setIsHardcoded] = useState(false);
+  const [localBackups, setLocalBackups] = useState<any[]>([]);
 
   const supabase = getSupabase();
+
+  const loadBackupsList = async () => {
+    try {
+      const files = await listLocalBackups();
+      setLocalBackups(files);
+    } catch (e) {
+      console.warn('Error loading local backups list:', e);
+    }
+  };
+
+  const handlePickAndRestore = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['application/json', '*/*'],
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const file = result.assets[0];
+        setLoading(true);
+        const jsonContent = await FileSystem.readAsStringAsync(file.uri);
+        const restoreResult = await restoreFromBackupJSON(jsonContent);
+
+        if (restoreResult.verified) {
+          Alert.alert(
+            'રીસ્ટોર સફળ અને વેરીફાઇડ ✅',
+            `ચોપડો: ${restoreResult.bookName}\nવિભાગો: ${restoreResult.departmentsCount}\nવ્યવહારો: ${restoreResult.cashbookCount}\n\nતમામ ડેટા ૧૦૦% સેમ ટુ સેમ વેરીફાઈ થઈ ગયો છે.`
+          );
+        } else {
+          Alert.alert('ચેતવણી', 'ડેટા રીસ્ટોર થયો પણ ગણતરીમાં તફાવત છે.');
+        }
+      }
+    } catch (e: any) {
+      console.error('Pick & Restore Error:', e);
+      Alert.alert('ભૂલ', e.message || 'ફાઇલ પસંદ કરી રીસ્ટોર કરવામાં ભૂલ આવી.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const loadSettingsData = async () => {
     try {
@@ -37,6 +80,7 @@ export default function SettingsScreen({ book, onBackToBooks, onLogout, onResetC
       
       if (error) throw error;
       setCollaborators(data || []);
+      await loadBackupsList();
     } catch (error) {
       console.error('Error loading settings:', error);
     }
@@ -222,6 +266,124 @@ export default function SettingsScreen({ book, onBackToBooks, onLogout, onResetC
           )}
         </Card.Content>
       </Card>
+
+      {/* Backup & Restore Management Section */}
+      <Card style={styles.card}>
+        <Card.Content>
+          <Text style={styles.cardTitle}>બેકઅપ અને રીસ્ટોર (Auto 2x Daily Backup)</Text>
+          <Text style={styles.infoText}>
+            દિવસમાં ૨ વખત (બપોરે ૧૨:૦૦ વાગે અને રાત્રે ૦૮:૦૦ વાગે) એપ્લિકેશન ઓટોમેટિક બેકઅપ ફાઇલ ડિવાઇસના ઇન્ટરનલ સ્ટોરેજમાં સેવ કરે છે.
+          </Text>
+
+          <View style={styles.backupBtnRow}>
+            <Button
+              mode="contained"
+              icon="cloud-upload"
+              onPress={async () => {
+                try {
+                  setLoading(true);
+                  const filePath = await saveBookBackupToFile(book.id, book.name, 'manual');
+                  await loadBackupsList();
+                  Alert.alert('સફળતા', 'હમણાં જ નવો બેકઅપ સફળતાપૂર્વક લેવાઈ ગયો છે.');
+                  await shareLocalBackupFile(filePath);
+                } catch (e: any) {
+                  Alert.alert('ભૂલ', e.message || 'બેકઅપ લેવામાં ભૂલ આવી.');
+                } finally {
+                  setLoading(false);
+                }
+              }}
+              loading={loading}
+              disabled={loading}
+              buttonColor="#1a73e8"
+              style={styles.flexBtn}
+            >
+              હમણાં બેકઅપ લો
+            </Button>
+            <Button
+              mode="outlined"
+              icon="folder-open"
+              onPress={handlePickAndRestore}
+              loading={loading}
+              disabled={loading}
+              textColor="#2e7d32"
+              style={[styles.flexBtn, { marginTop: 8, borderColor: '#2e7d32' }]}
+            >
+              બેકઅપ ફાઇલ સિલેક્ટ કરી રીસ્ટોર કરો
+            </Button>
+          </View>
+
+          <Divider style={styles.divider} />
+          <Text style={styles.subTitle}>સ્થાનિક ઇન્ટરનલ સેવ બેકઅપ્સ ({localBackups.length}):</Text>
+
+          {localBackups.length === 0 ? (
+            <Text style={styles.noCollabText}>હજુ સુધી કોઈ બેકઅપ ફાઇલ સંગ્રહિત નથી.</Text>
+          ) : (
+            <FlatList
+              data={localBackups.slice(0, 5)}
+              keyExtractor={(item) => item.filePath}
+              scrollEnabled={false}
+              renderItem={({ item }) => {
+                const dateStr = item.modificationTime 
+                  ? new Date(item.modificationTime).toLocaleString('gu-IN') 
+                  : item.fileName;
+                const sizeKb = Math.round(item.size / 1024);
+
+                return (
+                  <View style={styles.collabItem}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.collabEmail} numberOfLines={1}>{item.fileName}</Text>
+                      <Text style={{ fontSize: 10, color: '#757575' }}>{dateStr} • {sizeKb} KB</Text>
+                    </View>
+                    <IconButton
+                      icon="share-variant"
+                      iconColor="#1a73e8"
+                      size={20}
+                      onPress={() => shareLocalBackupFile(item.filePath)}
+                    />
+                    <IconButton
+                      icon="restore"
+                      iconColor="#2e7d32"
+                      size={20}
+                      onPress={async () => {
+                        Alert.alert(
+                          'બેકઅપ રીસ્ટોર',
+                          `શું તમે ખરેખર આ બેકઅપ ફાઇલમાંથી હિસાબો રીસ્ટોર કરવા માંગો છો?\n(${item.fileName})`,
+                          [
+                            { text: 'ના', style: 'cancel' },
+                            {
+                              text: 'હા, રીસ્ટોર કરો',
+                              onPress: async () => {
+                                try {
+                                  setLoading(true);
+                                  const jsonContent = await FileSystem.readAsStringAsync(item.filePath);
+                                  const result = await restoreFromBackupJSON(jsonContent);
+                                  
+                                  if (result.verified) {
+                                    Alert.alert(
+                                      'રીસ્ટોર સફળ અને વેરીફાઇડ ✅',
+                                      `ચોપડા: ${result.booksCount}\nવિભાગો: ${result.departmentsCount}\nવ્યવહારો: ${result.cashbookCount}\n\nતમામ ડેટા ૧૦૦% સેમ ટુ સેમ વેરીફાઈ થઈ ગયો છે.`
+                                    );
+                                  } else {
+                                    Alert.alert('ચેતવણી', 'ડેટા રીસ્ટોર થયો પણ ગણતરીમાં તફાવત છે.');
+                                  }
+                                } catch (err: any) {
+                                  Alert.alert('ભૂલ', err.message || 'રીસ્ટોર કરવામાં સમસ્યા આવી.');
+                                } finally {
+                                  setLoading(false);
+                                }
+                              }
+                            }
+                          ]
+                        );
+                      }}
+                    />
+                  </View>
+                );
+              }}
+            />
+          )}
+        </Card.Content>
+      </Card>
     </View>
   );
 }
@@ -314,5 +476,12 @@ const styles = StyleSheet.create({
   },
   listItem: {
     paddingVertical: 4,
+  },
+  backupBtnRow: {
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  flexBtn: {
+    borderRadius: 8,
   },
 });

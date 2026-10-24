@@ -4,6 +4,7 @@ import { Button, Card, Text, TextInput, Portal, Dialog, IconButton, ActivityIndi
 import { getSupabase } from '../utils/supabase';
 import { Book, CashbookEntry, Department } from '../types';
 import { generateAndSharePDF } from '../utils/pdf';
+import { generateAndShareExcel } from '../utils/excel';
 
 interface CashbookScreenProps {
   book: Book;
@@ -26,9 +27,11 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
 
   // Entry Dialog States
   const [dialogVisible, setDialogVisible] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<CashbookEntry | null>(null);
   const [entryType, setEntryType] = useState<'in' | 'out'>('in');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
+  const [transactionDate, setTransactionDate] = useState('');
   const [selectedEntryDept, setSelectedEntryDept] = useState<Department | null>(null);
   
   // Department Picker Dialog State
@@ -120,7 +123,7 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
     loadData();
   };
 
-  const handleAddEntry = async () => {
+  const handleSaveEntry = async () => {
     const currencyRegex = /^\d+(\.\d{1,2})?$/;
     const cleanAmount = amount.trim();
 
@@ -131,29 +134,58 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
 
     const amtNum = Math.round(Number(cleanAmount) * 100) / 100;
 
+    let finalDateIso = new Date().toISOString();
+    if (transactionDate.trim()) {
+      const parsedDate = new Date(transactionDate.trim());
+      if (!isNaN(parsedDate.getTime())) {
+        finalDateIso = parsedDate.toISOString();
+      }
+    }
+
     setSaving(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
 
-      const { error } = await supabase
-        .from('cashbook')
-        .insert({
-          book_id: book.id,
-          department_id: selectedEntryDept?.id || null,
-          type: entryType,
-          amount: amtNum,
-          description: description.trim() || null,
-          created_by: user?.id || null
-        });
+      if (editingEntry) {
+        // Update existing entry - allows editing every field: amount, type, description, department, date
+        const { error } = await supabase
+          .from('cashbook')
+          .update({
+            department_id: selectedEntryDept?.id || null,
+            type: entryType,
+            amount: amtNum,
+            description: description.trim() || null,
+            transaction_date: finalDateIso,
+          })
+          .eq('id', editingEntry.id);
 
-      if (error) throw error;
+        if (error) throw error;
+        Alert.alert('સફળતા', 'વ્યવહાર સફળતાપૂર્વક સુધારી લેવાયો છે (Updated).');
+      } else {
+        // Insert new entry
+        const { error } = await supabase
+          .from('cashbook')
+          .insert({
+            book_id: book.id,
+            department_id: selectedEntryDept?.id || null,
+            type: entryType,
+            amount: amtNum,
+            description: description.trim() || null,
+            created_by: user?.id || null,
+            transaction_date: finalDateIso,
+          });
 
+        if (error) throw error;
+        Alert.alert('સફળતા', 'કેશબુકમાં વ્યવહાર સેવ થઈ ગયો છે.');
+      }
+
+      setEditingEntry(null);
       setAmount('');
       setDescription('');
       setSelectedEntryDept(null);
+      setTransactionDate('');
       setDialogVisible(false);
       loadData();
-      Alert.alert('સફળતા', 'કેશબુકમાં વ્યવહાર સેવ થઈ ગયો છે.');
     } catch (error) {
       console.error(error);
       Alert.alert('ભૂલ', 'વ્યવહાર સેવ કરવામાં સમસ્યા આવી.');
@@ -191,10 +223,29 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
   };
 
   const openAddDialog = (type: 'in' | 'out') => {
+    setEditingEntry(null);
     setEntryType(type);
     setAmount('');
     setDescription('');
     setSelectedEntryDept(null);
+    setTransactionDate(new Date().toISOString());
+    setDialogVisible(true);
+  };
+
+  const openEditDialog = (entry: CashbookEntry) => {
+    setEditingEntry(entry);
+    setEntryType(entry.type);
+    setAmount(entry.amount.toString());
+    setDescription(entry.description || '');
+    setTransactionDate(entry.transaction_date);
+
+    if (entry.department_id) {
+      const foundDept = departments.find(d => d.id === entry.department_id);
+      setSelectedEntryDept(foundDept || (entry.departments ? { id: entry.department_id, name: entry.departments.name, book_id: entry.book_id, created_at: '' } : null));
+    } else {
+      setSelectedEntryDept(null);
+    }
+
     setDialogVisible(true);
   };
 
@@ -203,6 +254,13 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
       ? departments.find(d => d.id === selectedFilterDeptId)?.name || null 
       : null;
     generateAndSharePDF(book.name, filteredEntries, selectedDeptName);
+  };
+
+  const handleExportExcel = () => {
+    const selectedDeptName = selectedFilterDeptId 
+      ? departments.find(d => d.id === selectedFilterDeptId)?.name || null 
+      : null;
+    generateAndShareExcel(book.name, filteredEntries, selectedDeptName);
   };
 
   // Filter logic
@@ -220,11 +278,11 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
 
   const renderEntryItem = ({ item }: { item: CashbookEntry }) => {
     const dateObj = new Date(item.transaction_date);
-    const date = dateObj.toLocaleDateString('gu-IN', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
+    const dayNum = String(dateObj.getDate()).padStart(2, '0');
+    const monthNum = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const yearTwoDigits = String(dateObj.getFullYear()).slice(-2);
+    const date = `${dayNum}/${monthNum}/${yearTwoDigits}`;
+    const dayName = dateObj.toLocaleDateString('gu-IN', { weekday: 'long' });
     const time = dateObj.toLocaleTimeString('gu-IN', {
       hour: '2-digit',
       minute: '2-digit',
@@ -236,11 +294,15 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
     const deptName = item.departments?.name || 'વિભાગ વગર';
 
     return (
-      <Card style={[styles.entryCard, { borderLeftColor }]} mode="contained">
+      <Card 
+        style={[styles.entryCard, { borderLeftColor }]} 
+        mode="contained"
+        onPress={() => openEditDialog(item)}
+      >
         <View style={styles.entryCardContent}>
           <View style={styles.entryLeft}>
-            <Text style={styles.entryDate}>{date}  •  <Text style={styles.entryTime}>{time}</Text></Text>
-            <Text style={styles.entryDesc}>{item.description || (isIn ? 'રોકડ મેળવી' : 'રોકડ ચૂકવી')}</Text>
+            <Text style={styles.entryDate}>{date} ({dayName})  •  <Text style={styles.entryTime}>{time}</Text></Text>
+            <Text style={styles.entryDesc}>{item.description || (isIn ? 'શ્રી ૧|  આવક' : 'જાવક')}</Text>
             <View style={styles.entryDeptRow}>
               <Chip style={styles.entryDeptChip} textStyle={styles.entryDeptChipText} compact>
                 {deptName}
@@ -249,19 +311,28 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
           </View>
           <View style={styles.entryRight}>
             <Text style={[styles.entryAmount, { color: amtColor }]}>
-              {isIn ? `+ ₹${item.amount}` : `- ₹${item.amount}`}
+              {isIn ? `+ ₹${Math.round(item.amount)}` : `- ₹${Math.round(item.amount)}`}
             </Text>
             <Text style={[styles.entryTypeLabel, { color: amtColor }]}>
-              {isIn ? 'રોકડ આવી' : 'રોકડ ગઈ'}
+              {isIn ? 'શ્રી ૧|  આવક' : 'જાવક'}
             </Text>
           </View>
-          <IconButton
-            icon="trash-can-outline"
-            iconColor="#b0bec5"
-            size={18}
-            onPress={() => handleDeleteEntry(item.id)}
-            style={styles.deleteIconBtn}
-          />
+          <View style={styles.entryActionsRow}>
+            <IconButton
+              icon="pencil-outline"
+              iconColor="#1a73e8"
+              size={18}
+              onPress={() => openEditDialog(item)}
+              style={styles.actionIconBtn}
+            />
+            <IconButton
+              icon="trash-can-outline"
+              iconColor="#e57373"
+              size={18}
+              onPress={() => handleDeleteEntry(item.id)}
+              style={styles.actionIconBtn}
+            />
+          </View>
         </View>
       </Card>
     );
@@ -270,36 +341,48 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
   return (
     <View style={styles.container}>
       {/* Wallet Card Dashboard */}
-      <Card style={styles.cashInHandCard} elevation={5}>
+      <Card style={styles.cashInHandCard} elevation={4}>
         <Card.Content>
           <View style={styles.dashboardHeader}>
-            <Text style={styles.cashInHandLabel}>હાથ પર સિલક (Cash In Hand)</Text>
-            <IconButton 
-              icon="file-pdf-box" 
-              iconColor="#1a73e8" 
-              size={24} 
-              onPress={handleExportStatement}
-              style={styles.pdfIconBtn}
-            />
+            <View>
+              <Text style={styles.cashInHandLabel}>ચોપડો: {book.name}</Text>
+              <Text style={styles.cashInHandLabel}>હાથ પર સિલક (Cash In Hand)</Text>
+            </View>
+            <View style={{ flexDirection: 'row' }}>
+              <IconButton 
+                icon="file-pdf-box" 
+                iconColor="#d32f2f" 
+                size={26} 
+                onPress={handleExportStatement}
+                style={styles.pdfIconBtn}
+              />
+              <IconButton 
+                icon="file-excel-box" 
+                iconColor="#2e7d32" 
+                size={26} 
+                onPress={handleExportExcel}
+                style={styles.pdfIconBtn}
+              />
+            </View>
           </View>
           
           <Text style={[
             styles.cashInHandValue, 
             { color: cashInHand >= 0 ? '#2e7d32' : '#d32f2f' }
           ]}>
-            ₹{cashInHand}
+            ₹{Math.round(cashInHand)}
           </Text>
           <View style={styles.divider} />
           
           <View style={styles.summaryContainer}>
             <View style={styles.summaryCard}>
               <Text style={styles.summaryLabel}>આજની આવક (+)</Text>
-              <Text style={[styles.summaryAmount, styles.inText]}>₹{todayIn}</Text>
+              <Text style={[styles.summaryAmount, styles.inText]}>₹{Math.round(todayIn)}</Text>
             </View>
             <View style={styles.verticalDivider} />
             <View style={styles.summaryCard}>
               <Text style={styles.summaryLabel}>આજનો ખર્ચ (-)</Text>
-              <Text style={[styles.summaryAmount, styles.outText]}>₹{todayOut}</Text>
+              <Text style={[styles.summaryAmount, styles.outText]}>₹{Math.round(todayOut)}</Text>
             </View>
           </View>
         </Card.Content>
@@ -350,8 +433,8 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
         </View>
       ) : filteredEntries.length === 0 ? (
         <View style={styles.center}>
-          <IconButton icon="book-open-blank-variant-outline" size={60} iconColor="#b0bec5" />
-          <Text style={styles.noDataText}>વ્યવહારો ખાલી છે</Text>
+          <IconButton icon="notebook-outline" size={60} iconColor="#b0bec5" />
+          <Text style={styles.noDataText}>કોઈ વ્યવહાર મળ્યા નથી</Text>
         </View>
       ) : (
         <FlatList
@@ -365,7 +448,7 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
         />
       )}
 
-      {/* Action Buttons (રોકડ આવી / ગઈ) */}
+      {/* Action Buttons (શ્રી ૧|  આવક / જાવક) */}
       <View style={styles.actionButtonsRow}>
         <Button
           mode="contained"
@@ -374,7 +457,7 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
           icon="plus-box-outline"
           labelStyle={styles.actionBtnLabel}
         >
-          રોકડ આવી (+)
+          શ્રી ૧|  આવક (+)
         </Button>
         <Button
           mode="contained"
@@ -383,17 +466,45 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
           icon="minus-box-outline"
           labelStyle={styles.actionBtnLabel}
         >
-          રોકડ ગઈ (-)
+          જાવક (-)
         </Button>
       </View>
 
-      {/* Dialog for Adding New Cash Entry */}
+      {/* Dialog for Adding / Editing Cash Entry */}
       <Portal>
         <Dialog visible={dialogVisible} onDismiss={() => !saving && setDialogVisible(false)} style={styles.dialog}>
           <Dialog.Title style={[styles.dialogTitle, { color: entryType === 'in' ? '#2e7d32' : '#d32f2f' }]}>
-            {entryType === 'in' ? 'કેશ ઇન (આવક)' : 'કેશ આઉટ (જાવક / ખર્ચ)'}
+            {editingEntry 
+              ? (entryType === 'in' ? 'સુધારો: શ્રી ૧|  આવક' : 'સુધારો: જાવક')
+              : (entryType === 'in' ? 'શ્રી ૧|  આવક' : 'જાવક')}
           </Dialog.Title>
           <Dialog.Content style={styles.dialogContent}>
+            {/* Type selector toggle (allows changing between income and expense) */}
+            <View style={styles.dialogTypeToggleRow}>
+              <Button
+                mode={entryType === 'in' ? 'contained' : 'outlined'}
+                onPress={() => setEntryType('in')}
+                buttonColor={entryType === 'in' ? '#2e7d32' : undefined}
+                textColor={entryType === 'in' ? '#ffffff' : '#2e7d32'}
+                style={styles.dialogTypeBtn}
+                icon="plus"
+                compact
+              >
+                આવક (+)
+              </Button>
+              <Button
+                mode={entryType === 'out' ? 'contained' : 'outlined'}
+                onPress={() => setEntryType('out')}
+                buttonColor={entryType === 'out' ? '#d32f2f' : undefined}
+                textColor={entryType === 'out' ? '#ffffff' : '#d32f2f'}
+                style={styles.dialogTypeBtn}
+                icon="minus"
+                compact
+              >
+                જાવક (-)
+              </Button>
+            </View>
+
             <TextInput
               label="વ્યવહાર રકમ (₹)"
               value={amount}
@@ -418,6 +529,19 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
               activeOutlineColor={entryType === 'in' ? '#2e7d32' : '#d32f2f'}
             />
 
+            <TextInput
+              label="તારીખ અને સમય (ISO/Standard)"
+              value={transactionDate}
+              onChangeText={setTransactionDate}
+              placeholder="YYYY-MM-DDTHH:mm:ss"
+              mode="outlined"
+              style={styles.dialogInput}
+              disabled={saving}
+              outlineColor="#bdbdbd"
+              activeOutlineColor={entryType === 'in' ? '#2e7d32' : '#d32f2f'}
+              right={<TextInput.Icon icon="calendar-clock" />}
+            />
+
             {/* Department Select Trigger */}
             <Text style={styles.deptSelectLabel}>વિભાગ પસંદ કરો (ફરજિયાત નથી):</Text>
             <Button 
@@ -428,19 +552,19 @@ export default function CashbookScreen({ book }: CashbookScreenProps) {
               style={styles.deptSelectBtn}
               icon="domain"
             >
-              {selectedEntryDept ? selectedEntryDept.name : 'વિભાગ પસંદ કરો'}
+              {selectedEntryDept ? selectedEntryDept.name : 'વિભાગ પસંદ કરો (કોઈ નહિ)'}
             </Button>
           </Dialog.Content>
           <Dialog.Actions>
             <Button onPress={() => setDialogVisible(false)} disabled={saving} textColor="#666">કેન્સલ</Button>
             <Button 
-              onPress={handleAddEntry} 
+              onPress={handleSaveEntry} 
               loading={saving} 
               disabled={saving}
               mode="contained"
               buttonColor={entryType === 'in' ? '#2e7d32' : '#d32f2f'}
             >
-              સાચવો
+              {editingEntry ? 'અપડેટ કરો' : 'સાચવો'}
             </Button>
           </Dialog.Actions>
         </Dialog>
@@ -641,6 +765,13 @@ const styles = StyleSheet.create({
     fontSize: 9,
     marginTop: 2,
   },
+  entryActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  actionIconBtn: {
+    margin: 0,
+  },
   deleteIconBtn: {
     margin: 0,
   },
@@ -658,12 +789,9 @@ const styles = StyleSheet.create({
   },
   actionButtonsRow: {
     flexDirection: 'row',
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
     backgroundColor: '#ffffff',
     padding: 12,
+    paddingBottom: 12,
     borderTopWidth: 1,
     borderTopColor: '#e0e0e0',
     elevation: 8,
@@ -695,6 +823,15 @@ const styles = StyleSheet.create({
   },
   dialogContent: {
     paddingBottom: 8,
+  },
+  dialogTypeToggleRow: {
+    flexDirection: 'row',
+    marginBottom: 14,
+    gap: 8,
+  },
+  dialogTypeBtn: {
+    flex: 1,
+    borderRadius: 8,
   },
   dialogInput: {
     marginBottom: 14,

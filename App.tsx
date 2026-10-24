@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, SafeAreaView, StatusBar } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, StatusBar, Platform } from 'react-native';
 import { Provider as PaperProvider, MD3LightTheme } from 'react-native-paper';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 // Import Screens
@@ -14,6 +14,7 @@ import SettingsScreen from './src/screens/SettingsScreen';
 
 // Import Utilities
 import { autoInitSupabase, isSupabaseConfigured, clearSupabaseConfig, getSupabase } from './src/utils/supabase';
+import { performAutoBackupCheck } from './src/utils/backup';
 import { Book } from './src/types';
 
 // Design Theme
@@ -77,8 +78,11 @@ export default function App() {
             if (event === 'SIGNED_OUT' || !session) {
               setCurrentScreen('login');
               setSelectedBook(null);
-            } else if (event === 'SIGNED_IN' && session) {
-              setCurrentScreen('books');
+            } else if (session) {
+              // Automatically open list of all books whenever user is logged in
+              setCurrentScreen((prev) => (prev === 'loading' || prev === 'login' || prev === 'setup' ? 'books' : prev));
+              // Trigger 2x daily automated backup check
+              performAutoBackupCheck();
             }
           });
           subscription = data.subscription;
@@ -127,8 +131,8 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <PaperProvider theme={theme}>
-        <SafeAreaView style={styles.container}>
-          <StatusBar barStyle="light-content" backgroundColor="#1976d2" />
+        <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
+          <StatusBar barStyle="light-content" backgroundColor="#1976d2" translucent={false} />
 
           {/* Setup Connection Flow */}
           {currentScreen === 'setup' && (
@@ -218,6 +222,23 @@ export default function App() {
                     ]}
                   >
                     વિભાગો
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.tabItem}
+                  onPress={() => {
+                    setSelectedBook(null);
+                    setCurrentScreen('books');
+                  }}
+                >
+                  <MaterialCommunityIcons
+                    name="book-sync"
+                    size={24}
+                    color="#757575"
+                  />
+                  <Text style={[styles.tabLabel, { color: '#757575' }]}>
+                    ચોપડો બદલો
                   </Text>
                 </TouchableOpacity>
 

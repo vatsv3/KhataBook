@@ -19,36 +19,36 @@ export const generateAndSharePDF = async (
     let totalOut = 0;
 
     const rowsHtml = sortedEntries.map((entry) => {
-      const amt = Math.round((Number(entry.amount) || 0) * 100) / 100;
+      const amt = Math.round(Number(entry.amount) || 0);
       const isIn = entry.type === 'in';
       
       if (isIn) {
-        runningBalance = Math.round((runningBalance + amt) * 100) / 100;
-        totalIn = Math.round((totalIn + amt) * 100) / 100;
+        runningBalance = Math.round(runningBalance + amt);
+        totalIn = Math.round(totalIn + amt);
       } else {
-        runningBalance = Math.round((runningBalance - amt) * 100) / 100;
-        totalOut = Math.round((totalOut + amt) * 100) / 100;
+        runningBalance = Math.round(runningBalance - amt);
+        totalOut = Math.round(totalOut + amt);
       }
 
       const dateObj = new Date(entry.transaction_date);
-      const date = dateObj.toLocaleDateString('gu-IN', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-      });
+      const dayNum = String(dateObj.getDate()).padStart(2, '0');
+      const monthNum = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const yearTwoDigits = String(dateObj.getFullYear()).slice(-2);
+      const formattedDate = `${dayNum}/${monthNum}/${yearTwoDigits}`;
+      const dayName = dateObj.toLocaleDateString('gu-IN', { weekday: 'long' });
       const time = dateObj.toLocaleTimeString('gu-IN', {
         hour: '2-digit',
         minute: '2-digit',
       });
 
       const dept = entry.departments?.name || '-';
-      const desc = entry.description || (isIn ? 'રોકડ મેળવી' : 'રોકડ ચૂકવી');
+      const desc = entry.description || (isIn ? 'શ્રી ૧|  આવક' : 'જાવક');
       const inVal = isIn ? `₹${amt}` : '-';
       const outVal = !isIn ? `₹${amt}` : '-';
 
       return `
         <tr>
-          <td>${date}<br/><small style="color: #7f8c8d;">${time}</small></td>
+          <td>${formattedDate} (${dayName})<br/><small style="color: #7f8c8d;">${time}</small></td>
           <td>${desc}</td>
           <td><span class="dept-badge">${dept}</span></td>
           <td class="text-right text-success">${inVal}</td>
@@ -161,7 +161,7 @@ export const generateAndSharePDF = async (
             <div class="summary-value text-success">₹${totalIn}</div>
           </div>
           <div class="summary-card">
-            <div class="summary-title">કુલ જાવક / ખર્ચ (-)</div>
+            <div class="summary-title">કુલ જાવક (-)</div>
             <div class="summary-value text-danger">₹${totalOut}</div>
           </div>
           <div class="summary-card" style="background-color: #e8f0fe; border-color: #d2e3fc;">
