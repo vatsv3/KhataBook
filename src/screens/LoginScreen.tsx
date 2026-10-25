@@ -32,8 +32,15 @@ export default function LoginScreen({ onLoginSuccess, onChangeConnection }: Logi
     const supabase = getSupabase();
 
     try {
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim());
-      if (resetError) throw resetError;
+      // Use signInWithOtp which sends a 6-digit OTP email by default (Magic Link / OTP template)
+      // Even with Supabase's default mailer and without custom SMTP, this delivers a direct 6-digit code.
+      const { error: otpError } = await supabase.auth.signInWithOtp({
+        email: email.trim(),
+        options: {
+          shouldCreateUser: false, // Prevents creating a new account if email doesn't exist
+        },
+      });
+      if (otpError) throw otpError;
       setResetStep(2);
       setMessage('તમારા ઇમેઇલ પર ૬ અંકનો સુરક્ષિત કોડ (OTP) મોકલી દેવામાં આવ્યો છે. નીચે કોડ અને નવો પાસવર્ડ દાખલ કરો.');
     } catch (err: any) {
@@ -61,16 +68,25 @@ export default function LoginScreen({ onLoginSuccess, onChangeConnection }: Logi
     const supabase = getSupabase();
 
     try {
-      // 1. Verify the OTP token for recovery
-      const { data: verifyData, error: verifyError } = await supabase.auth.verifyOtp({
+      // 1. Verify the OTP token (supports both 'email' magic link OTP and 'recovery')
+      let verifyRes = await supabase.auth.verifyOtp({
         email: email.trim(),
         token: cleanOtp,
-        type: 'recovery',
+        type: 'email',
       });
 
-      if (verifyError) throw verifyError;
+      if (verifyRes.error) {
+        // Fallback to recovery type if email type failed
+        verifyRes = await supabase.auth.verifyOtp({
+          email: email.trim(),
+          token: cleanOtp,
+          type: 'recovery',
+        });
+      }
 
-      // 2. Set the new password for the authenticated recovery session
+      if (verifyRes.error) throw verifyRes.error;
+
+      // 2. Set the new password for the authenticated session
       const { error: updateError } = await supabase.auth.updateUser({
         password: newPassword,
       });
